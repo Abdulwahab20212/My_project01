@@ -1,0 +1,135 @@
+`timescale 1ns / 1ps
+
+module BasicComputer(
+    input clk,
+    input reset,          // Added reset signal
+    output reg [15:0] IR, // Instruction Register
+    output reg [15:0] TR, // Temporary Register
+    output reg [15:0] DR, // Data Register
+    output reg [15:0] AC, // Accumulator
+    output reg [11:0] PC, // Program Counter
+    output reg [11:0] AR, // Address Register
+    output reg [3:0] timeCount // Timing counter
+);
+
+
+// Internal registers
+reg [15:0] MEM [0:MEM_SIZE-1]; // Main memory
+reg I;                   // Indirect addressing flag
+reg E;                   // Extended accumulator bit
+reg S;                   // Start/stop flag (1=run, 0=halt)
+
+
+// Initialize registers and memory
+initial begin
+    // Initialize all registers
+    timeCount = 0;
+    IR = 0;
+    TR = 0;
+    DR = 0;
+    AC = 0;
+    PC = 0;
+    AR = 0;
+    I = 0;
+    E = 0;
+    S = 1;
+    
+    // Initialize memory - Correct syntax
+    $readmemh("D:/Abdo/mano-basic-computer-main/mem_data.txt", MEM);
+    
+    // Verify memory initialization
+    begin : mem_check
+        integer i;
+        for (i = 0; i < MEM_SIZE; i = i + 1) begin
+            if (MEM[i] === 16'bx) begin
+                MEM[i] = 0;  // Initialize any uninitialized locations
+                $display("Warning: Memory location %0d was uninitialized", i);
+            end
+        end
+    end
+end
+
+// Reset and main operation
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        // Synchronous reset
+        IR <= 0;
+        TR <= 0;
+        DR <= 0;
+        AC <= 0;
+        PC <= 0;
+        AR <= 0;
+        I <= 0;
+        E <= 0;
+        S <= 1;
+        timeCount <= 0;
+    end
+    else if (S) begin    // Only execute if not halted
+        // Fetch cycle
+        case (timeCount)
+            0: begin
+                AR <= PC;
+                timeCount <= timeCount + 1;
+            end
+            1: begin
+                IR <= MEM[AR[7:0]];
+                PC <= PC + 1;
+                timeCount <= timeCount + 1;
+            end
+            2: begin
+                AR <= IR[11:0];
+                I <= IR[15];
+                timeCount <= timeCount + 1;
+            end
+            
+            // Execute cycle
+            default: begin
+                // Register-reference instructions (opcode 7)
+                if (IR[14:12] == 3'b111 && I == 0) begin
+                    casez (AR[11:1])  // Priority decoding
+                        11'b1??????????: begin AC <= 0; timeCount <= 0; end       // CLA
+                        11'b01?????????: begin E <= 0; timeCount <= 0; end        // CLE
+                        11'b001????????: begin AC <= ~AC; timeCount <= 0; end     // CMA
+                        11'b0001???????: begin E <= ~E; timeCount <= 0; end      // CME
+                        11'b00001??????: begin {AC, E} <= {E, AC} >> 1; timeCount <= 0; end // CIR
+                        11'b000001?????: begin {E, AC} <= {AC, E} << 1; timeCount <= 0; end // CIL
+                        11'b0000001????: begin AC <= AC + 1; timeCount <= 0; end // INC
+                        11'b00000001???: begin if (!AC[15]) PC <= PC + 1; timeCount <= 0; end // SPA
+                        11'b000000001??: begin if (AC[15]) PC <= PC + 1; timeCount <= 0; end // SNA
+                        11'b0000000001?: begin if (AC == 0) PC <= PC + 1; timeCount <= 0; end // SZA
+                        11'b00000000001: begin if (!E) PC <= PC + 1; timeCount <= 0; end // SZE
+                        default: begin S <= 0; timeCount <= 0; end               // HLT
+                    endcase
+                end
+                // Memory-reference instructions
+                else begin
+                    // Indirect addressing cycle
+                    if (I && timeCount == 3) begin
+                        AR <= MEM[AR[7:0]];
+                        timeCount <= timeCount + 1;
+                    end
+                    else begin
+                        case (IR[14:12])
+                            3'b000: begin // AND
+                                if (timeCount == 4) begin
+                                    DR <= MEM[AR[7:0]];
+                                    timeCount <= timeCount + 1;
+                                end
+                                else begin
+                                    AC <= AC & DR;
+                                    timeCount <= 0;
+                                end
+                            end
+                            
+                            // ... [other instructions] ...
+                            
+                            default: timeCount <= 0; // Invalid opcode
+                        endcase
+                    end
+                end
+            end
+        endcase
+    end
+end
+
+endmodule
